@@ -1,13 +1,18 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import DBSCAN
-import matplotlib.pyplot as plt
 
-st.title("Anomaly Detection using DBSCAN")
+st.title("Network Intrusion Detection using DBSCAN (NSL-KDD Dataset)")
+st.markdown("""
+This project detects network intrusions using the NSL-KDD dataset.
+DBSCAN is used to identify anomalous (malicious) network traffic patterns
+without requiring labeled training data.
+""")
 
 # -----------------------------
 # DATA INPUT
@@ -30,9 +35,7 @@ else:
     st.warning("Upload dataset or use default")
     st.stop()
 
-# Limit size (important)
 df = df.head(1000)
-
 st.write("Dataset shape:", df.shape)
 
 # -----------------------------
@@ -56,15 +59,14 @@ st.subheader("Epsilon Comparison")
 
 eps_values = [0.3, 0.5, 0.7, 1.0]
 
-for eps in eps_values:
-    preds = DBSCAN(eps=eps, min_samples=10).fit_predict(X_reduced)
-    
-    st.write(f"EPS = {eps}")
-    st.write("Clusters:", len(set(preds)))
+for eps_val in eps_values:
+    preds = DBSCAN(eps=eps_val, min_samples=10).fit_predict(X_reduced)
+    st.write(f"EPS = {eps_val}")
+    st.write("Clusters:", len(set(preds)) - (1 if -1 in preds else 0))
     st.write("Anomalies:", np.sum(preds == -1))
 
 # -----------------------------
-# MODEL CONTROL
+# MODEL RUN
 # -----------------------------
 st.subheader("Run DBSCAN")
 
@@ -72,84 +74,105 @@ eps = st.slider("Select Epsilon", 0.1, 1.5, 0.7)
 
 clusters = DBSCAN(eps=eps, min_samples=10).fit_predict(X_reduced)
 
+df = df.copy()
+df["cluster"] = clusters
+df["label"] = y.astype(str)
+
 # -----------------------------
 # DEBUG OUTPUT
 # -----------------------------
 st.subheader("Debug Output")
 
 st.write("Total records:", len(df))
-st.write("Clusters found:", len(set(clusters)))
+st.write("Clusters found:", len(set(clusters)) - (1 if -1 in clusters else 0))
 st.write("Anomalies detected:", np.sum(clusters == -1))
 
-df = df.copy()
-df["cluster"] = clusters
-df["label"] = y.astype(str)
-
 # -----------------------------
-# CLUSTER ANALYSIS
+# EPSILON vs ANOMALY %
 # -----------------------------
-st.subheader("Cluster Distribution")
-st.write(df["cluster"].value_counts())
+def anomaly_percentage_per_epsilon(X, eps_values, min_samples=10):
+    results = []
 
-result = df.groupby("cluster")["label"].value_counts().unstack(fill_value=0)
+    for eps_val in eps_values:
+        labels = DBSCAN(eps=eps_val, min_samples=min_samples).fit_predict(X)
+        results.append({
+            "epsilon": eps_val,
+            "anomaly_percentage": np.mean(labels == -1) * 100
+        })
 
-st.subheader("Cluster vs Label Table")
-st.dataframe(result)
+    return pd.DataFrame(results)
 
-# Anomaly analysis
-st.subheader("Anomaly Breakdown (-1 cluster)")
-if -1 in result.index:
-    st.write(result.loc[-1].sort_values(ascending=False))
-else:
-    st.write("No anomalies detected")
+eval_df = anomaly_percentage_per_epsilon(X_reduced, eps_values)
 
-# -----------------------------
-# VISUALIZATION
-# -----------------------------
+# =========================================================
+# 🔥 VISUALS AT TOP (RIGHT AFTER EPSILON)
+# =========================================================
+st.subheader(" Visualizations ")
 
-# 1. Cluster Scatter
-st.subheader("Cluster Visualization")
+fig, axs = plt.subplots(2, 2, figsize=(14, 10))
 
-fig1, ax1 = plt.subplots()
-scatter = ax1.scatter(
+# 1. Cluster Distribution
+cluster_counts = pd.Series(clusters).value_counts().sort_index()
+cluster_counts.plot(kind="bar", ax=axs[0, 0])
+axs[0, 0].set_title("Cluster Distribution")
+
+# 2. Cluster Scatter
+scatter = axs[0, 1].scatter(
     X_reduced[:, 0],
     X_reduced[:, 1],
     c=clusters,
     cmap="rainbow",
     s=10
 )
-plt.colorbar(scatter)
-ax1.set_title("DBSCAN Clustering (PCA Reduced Data)")
-st.pyplot(fig1)
+axs[0, 1].set_title("DBSCAN Clusters")
+fig.colorbar(scatter, ax=axs[0, 1])
 
-# 2. Anomaly Highlight
-st.subheader("Anomaly Detection Visualization")
+# 3. Anomaly Visualization
+axs[1, 0].scatter(
+    X_reduced[:, 0],
+    X_reduced[:, 1],
+    c="lightgray",
+    s=10,
+    label="Normal"
+)
 
-fig2, ax2 = plt.subplots()
-
-# Normal
-ax2.scatter(X_reduced[:, 0], X_reduced[:, 1],
-            c="lightgray", s=10, label="Normal")
-
-# Anomalies
 anomalies = clusters == -1
-ax2.scatter(X_reduced[anomalies, 0],
-            X_reduced[anomalies, 1],
-            c="red", s=20, label="Anomalies (-1)")
 
-ax2.legend()
-ax2.set_title("Anomaly Detection using DBSCAN")
+axs[1, 0].scatter(
+    X_reduced[anomalies, 0],
+    X_reduced[anomalies, 1],
+    c="red",
+    s=20,
+    label="Anomalies"
+)
 
-st.pyplot(fig2)
+axs[1, 0].legend()
+axs[1, 0].set_title("Anomaly Detection")
 
-# 3. Cluster Distribution Bar Chart
-st.subheader("Cluster Distribution Chart")
+# 4. Epsilon vs Anomaly %
+axs[1, 1].plot(
+    eval_df["epsilon"],
+    eval_df["anomaly_percentage"],
+    marker="o"
+)
 
-fig3, ax3 = plt.subplots()
-df["cluster"].value_counts().sort_index().plot(kind="bar", ax=ax3)
+axs[1, 1].set_title("Epsilon vs Anomaly %")
 
-ax3.set_title("Cluster Distribution")
-ax3.set_xlabel("Cluster ID")
-ax3.set_ylabel("Number of Samples")
+plt.tight_layout()
+st.pyplot(fig)
 
-st.pyplot(fig3)
+# =========================================================
+# 🔚 TABLES AT THE END (AS REQUESTED)
+# =========================================================
+
+st.subheader("Cluster vs Label Table")
+
+result = df.groupby("cluster")["label"].value_counts().unstack(fill_value=0)
+st.dataframe(result)
+
+st.subheader("Anomaly Breakdown (-1 cluster)")
+
+if -1 in result.index:
+    st.write(result.loc[-1].sort_values(ascending=False))
+else:
+    st.write("No anomalies detected")
